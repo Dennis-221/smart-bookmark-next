@@ -20,6 +20,9 @@ export default function BookmarkApp({
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [realtimeStatus, setRealtimeStatus] = useState<
+    "CONNECTED" | "CONNECTING" | "DISCONNECTED"
+  >("DISCONNECTED");
 
   const fetchBookmarks = useCallback(async () => {
     if (!user) {
@@ -60,7 +63,12 @@ export default function BookmarkApp({
   }, [supabase]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setRealtimeStatus("DISCONNECTED");
+      return;
+    }
+
+    setRealtimeStatus("CONNECTING");
 
     const channel = supabase
       .channel(`bookmarks-${user.id}`)
@@ -76,9 +84,20 @@ export default function BookmarkApp({
           void fetchBookmarks();
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setRealtimeStatus("CONNECTED");
+          return;
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setRealtimeStatus("DISCONNECTED");
+          return;
+        }
+        setRealtimeStatus("CONNECTING");
+      });
 
     return () => {
+      setRealtimeStatus("DISCONNECTED");
       void supabase.removeChannel(channel);
     };
   }, [fetchBookmarks, supabase, user]);
@@ -180,6 +199,22 @@ export default function BookmarkApp({
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Smart Bookmarks</h1>
           <p className="mt-1 text-sm text-slate-600">{user.email}</p>
+          <p className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-200 px-2.5 py-1 text-xs font-medium">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                realtimeStatus === "CONNECTED"
+                  ? "bg-emerald-500"
+                  : realtimeStatus === "CONNECTING"
+                    ? "bg-amber-400"
+                    : "bg-red-500"
+              }`}
+            />
+            {realtimeStatus === "CONNECTED"
+              ? "Live"
+              : realtimeStatus === "CONNECTING"
+                ? "Connecting..."
+                : "Offline"}
+          </p>
         </div>
         <button
           onClick={handleLogout}
