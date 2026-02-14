@@ -1,6 +1,6 @@
 # Smart bookmark handling with Next.js and Supabase
 
-# This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 # Smart Bookmarks
 
@@ -78,10 +78,7 @@ npm run dev
 
 5. Redeploy.
 
-<<<<<<< HEAD
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-
-> > > > > > > # 6f1cf5f (Initial commit from Create Next App)
 
 ## Folder Structure
 
@@ -91,4 +88,9 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 - `src/lib/supabase/*`: Browser/server/middleware Supabase clients.
 - `src/lib/types.ts`: App types.
 - `supabase/schema.sql`: Table, RLS policies, realtime publication.
-  > > > > > > > 71e864d (Build smart bookmarks app with Next.js, Supabase for auth-db-realtime)
+
+## Problems faced
+
+- Finding the correct keys and urls: anon key is enlisted in Publishable keys section in Supabase Project settings.
+- Implementing cross-tab sync on the bookmark list is the toughest part requires understanding of  React hooks, callbacks and the useRef.
+- Patch application for "Live"/"Connecting" status indicators was a major step in achieving the former goal. 
