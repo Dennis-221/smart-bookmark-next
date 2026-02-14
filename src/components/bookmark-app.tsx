@@ -2,7 +2,10 @@
 
 import { createClient } from "@/lib/supabase/client";
 import type { AppUser, Bookmark } from "@/lib/types";
-import { useCallback, useEffect, useMemo, useState } from "react";
+// import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+const TAB_SYNC_CHANNEL = "smart-bookmarks-tab-sync";
 
 type BookmarkAppProps = {
   initialUser: AppUser | null;
@@ -13,6 +16,7 @@ export default function BookmarkApp({
   initialUser,
   initialBookmarks,
 }: BookmarkAppProps) {
+  const tabSyncRef = useRef<BroadcastChannel | null>(null);
   const supabase = useMemo(() => createClient(), []);
   const [user, setUser] = useState<AppUser | null>(initialUser);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(initialBookmarks);
@@ -43,6 +47,43 @@ export default function BookmarkApp({
     setBookmarks(data ?? []);
   }, [supabase, user]);
 
+  const notifyOtherTabs = useCallback(() => {
+    if (!user || !tabSyncRef.current) return;
+    tabSyncRef.current.postMessage({
+      userId: user.id,
+      type: "BOOKMARKS_CHANGED",
+    });
+  }, [user]);
+
+  useEffect(() => {
+    if (
+      !user ||
+      typeof window === "undefined" ||
+      !("BroadcastChannel" in window)
+    ) {
+      return;
+    }
+
+    const channel = new BroadcastChannel(TAB_SYNC_CHANNEL);
+    tabSyncRef.current = channel;
+
+    channel.onmessage = (
+      event: MessageEvent<{ userId?: string; type?: string }>,
+    ) => {
+      if (
+        event.data?.type === "BOOKMARKS_CHANGED" &&
+        event.data?.userId === user.id
+      ) {
+        void fetchBookmarks();
+      }
+    };
+
+    return () => {
+      channel.close();
+      tabSyncRef.current = null;
+    };
+  }, [fetchBookmarks, user]);
+
   useEffect(() => {
     setUser(initialUser);
     setBookmarks(initialBookmarks);
@@ -52,6 +93,10 @@ export default function BookmarkApp({
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      const accessToken = session?.access_token;
+      if (accessToken) {
+        supabase.realtime.setAuth(accessToken);
+      }
       setUser(
         session?.user
           ? { id: session.user.id, email: session.user.email ?? null }
@@ -63,42 +108,62 @@ export default function BookmarkApp({
   }, [supabase]);
 
   useEffect(() => {
-    if (!user) {
-      setRealtimeStatus("DISCONNECTED");
-      return;
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function startRealtime() {
+      if (!user) {
+        setRealtimeStatus("DISCONNECTED");
+        return;
+      }
+
+      setRealtimeStatus("CONNECTING");
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
+
+      if (!active) return;
+
+      channel = supabase
+        .channel(`bookmarks-${user.id}-${crypto.randomUUID()}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "bookmarks",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            void fetchBookmarks();
+          },
+        )
+        .subscribe((status) => {
+          if (!active) return;
+          if (status === "SUBSCRIBED") {
+            setRealtimeStatus("CONNECTED");
+            return;
+          }
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            setRealtimeStatus("DISCONNECTED");
+            return;
+          }
+          setRealtimeStatus("CONNECTING");
+        });
     }
 
-    setRealtimeStatus("CONNECTING");
-
-    const channel = supabase
-      .channel(`bookmarks-${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "bookmarks",
-          filter: `user_id=eq.${user.id}`,
-        },
-        () => {
-          void fetchBookmarks();
-        },
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          setRealtimeStatus("CONNECTED");
-          return;
-        }
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          setRealtimeStatus("DISCONNECTED");
-          return;
-        }
-        setRealtimeStatus("CONNECTING");
-      });
+    void startRealtime();
 
     return () => {
+      active = false;
       setRealtimeStatus("DISCONNECTED");
-      void supabase.removeChannel(channel);
+      if (channel) {
+        void supabase.removeChannel(channel);
+      }
     };
   }, [fetchBookmarks, supabase, user]);
 
@@ -147,6 +212,7 @@ export default function BookmarkApp({
 
       if (data) {
         setBookmarks((prev) => [data, ...prev]);
+        notifyOtherTabs();
       }
       setTitle("");
       setUrl("");
@@ -168,13 +234,17 @@ export default function BookmarkApp({
     if (error) {
       setBookmarks(previous);
       setErrorMessage(error.message);
+    } else {
+      notifyOtherTabs();
     }
   }
 
   if (!user) {
     return (
       <section className="mx-auto max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-semibold text-slate-900">Smart Bookmarks</h1>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          Smart Bookmarks
+        </h1>
         <p className="mt-2 text-sm text-slate-600">
           Sign in with Google to create private bookmarks synced across tabs.
         </p>
@@ -197,7 +267,9 @@ export default function BookmarkApp({
     <section className="mx-auto max-w-2xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Smart Bookmarks</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">
+            Smart Bookmarks
+          </h1>
           <p className="mt-1 text-sm text-slate-600">{user.email}</p>
           <p className="mt-2 inline-flex items-center gap-2 rounded-full border border-slate-200 px-2.5 py-1 text-xs font-medium">
             <span
@@ -230,7 +302,10 @@ export default function BookmarkApp({
         </p>
       ) : null}
 
-      <form onSubmit={handleAddBookmark} className="mt-6 grid gap-3 sm:grid-cols-2">
+      <form
+        onSubmit={handleAddBookmark}
+        className="mt-6 grid gap-3 sm:grid-cols-2"
+      >
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -266,7 +341,9 @@ export default function BookmarkApp({
               className="flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-3"
             >
               <div className="min-w-0">
-                <p className="truncate font-medium text-slate-900">{bookmark.title}</p>
+                <p className="truncate font-medium text-slate-900">
+                  {bookmark.title}
+                </p>
                 <a
                   href={bookmark.url}
                   target="_blank"
